@@ -79,13 +79,21 @@ class MainActivity : Activity() {
         startActivityForResult(i, 1)
     }
 
+    private fun androidPermiteCrearEspacio(): Boolean {
+        return try {
+            val dpm = getSystemService(DevicePolicyManager::class.java)
+            dpm.isProvisioningAllowed(DevicePolicyManager.ACTION_PROVISION_MANAGED_PROFILE)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun crearEspacio() {
-        val dpm = getSystemService(DevicePolicyManager::class.java)
         if (!packageManager.hasSystemFeature(PackageManager.FEATURE_MANAGED_USERS)) {
             Toast.makeText(this, "Este teléfono no soporta perfiles de trabajo", Toast.LENGTH_LONG).show()
             return
         }
-        if (!dpm.isProvisioningAllowed(DevicePolicyManager.ACTION_PROVISION_MANAGED_PROFILE)) {
+        if (!androidPermiteCrearEspacio()) {
             Toast.makeText(
                 this,
                 "Android no permite crear el espacio ahora (quizá ya existe uno)",
@@ -193,7 +201,8 @@ class MainActivity : Activity() {
     private fun construirPantalla() {
         val dpm = getSystemService(DevicePolicyManager::class.java)
         val dentroDelEspacio = dpm.isProfileOwnerApp(packageName)
-        val hayEspacio = getSystemService(UserManager::class.java).userProfiles.size > 1
+        val perfiles = getSystemService(UserManager::class.java).userProfiles.size
+        val puedeCrear = androidPermiteCrearEspacio()
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -218,12 +227,18 @@ class MainActivity : Activity() {
             return
         }
 
-        if (!hayEspacio) {
-            layout.addView(Button(this).apply {
-                text = "Crear espacio de clones"
-                setOnClickListener { crearEspacio() }
-            })
-        }
+        layout.addView(Button(this).apply {
+            text = "Crear espacio de clones"
+            setOnClickListener { crearEspacio() }
+        })
+
+        layout.addView(TextView(this).apply {
+            text = "Perfiles detectados: $perfiles  |  Android permite crear espacio: " +
+                if (puedeCrear) "sí" else "no"
+            textSize = 13f
+            setTextColor(Color.GRAY)
+            setPadding(0, 8, 0, 8)
+        })
 
         val pm = packageManager
         val enEspacio = paquetesEnOtrosPerfiles()
@@ -243,7 +258,7 @@ class MainActivity : Activity() {
             text = "Toca una app para clonarla"
             textSize = 20f
             setTextColor(Color.BLACK)
-            setPadding(0, 24, 0, 16)
+            setPadding(0, 16, 0, 16)
         })
 
         val lista = ListView(this)
