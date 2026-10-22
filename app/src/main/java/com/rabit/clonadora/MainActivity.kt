@@ -1,26 +1,43 @@
 package com.rabit.clonadora
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.LauncherApps
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Process
+import android.os.UserManager
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+
+data class AppItem(
+    val nombre: String,
+    val paquete: String,
+    val icono: Drawable,
+    val enEspacio: Boolean
+)
 
 class MainActivity : Activity() {
 
@@ -51,6 +68,8 @@ class MainActivity : Activity() {
         } else {
             i.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
         }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun elegirApk() {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -91,7 +110,7 @@ class MainActivity : Activity() {
         }
         if (requestCode == 2) {
             val msg = if (resultCode == RESULT_OK) {
-                "Espacio creado. Busca la pestaña Trabajo en tus apps"
+                "Espacio creado. Abre una vez la Clonadora de la pestaña Trabajo"
             } else {
                 "Creación cancelada o fallida"
             }
@@ -125,24 +144,56 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val filtro = IntentFilter(accion)
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(receptor, filtro, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(receptor, filtro)
+    private fun paquetesEnOtrosPerfiles(): Set<String> {
+        val res = mutableSetOf<String>()
+        try {
+            val la = getSystemService(LauncherApps::class.java)
+            val yo = Process.myUserHandle()
+            for (p in la.profiles) {
+                if (p != yo) {
+                    la.getActivityList(null, p).forEach {
+                        res.add(it.applicationInfo.packageName)
+                    }
+                }
+            }
+        } catch (e: Exception) {
         }
+        return res
+    }
 
+    private fun preguntarClon(app: AppItem) {
+        val extra = if (app.enEspacio) "\n\n(Ya hay una copia en el espacio de trabajo.)" else ""
+        AlertDialog.Builder(this)
+            .setTitle(app.nombre)
+            .setIcon(app.icono)
+            .setMessage("¿Quieres crear un clon de esta app?$extra")
+            .setPositiveButton("Sí, clonar") { _, _ -> enviarClon(app) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun enviarClon(app: AppItem) {
+        val i = Intent(ACCION_CLONAR)
+            .addCategory(Intent.CATEGORY_DEFAULT)
+            .putExtra("paquete", app.paquete)
+        try {
+            startActivity(i)
+            Handler(Looper.getMainLooper()).postDelayed({ construirPantalla() }, 2500)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(
+                this,
+                "El espacio no está listo. Abre una vez la Clonadora de la pestaña Trabajo y vuelve a intentar.",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun construirPantalla() {
         val dpm = getSystemService(DevicePolicyManager::class.java)
         val dentroDelEspacio = dpm.isProfileOwnerApp(packageName)
-
-        val pm = packageManager
-        val apps = pm.getInstalledApplications(0)
-            .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
-            .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
-        val nombres = apps.map { pm.getApplicationLabel(it).toString() }
+        val hayEspacio = getSystemService(UserManager::class.java).userProfiles.size > 1
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -150,53 +201,100 @@ class MainActivity : Activity() {
             setPadding(32, 160, 32, 32)
         }
 
-        val botonApk = Button(this).apply {
+        layout.addView(Button(this).apply {
             text = "Instalar un APK"
             setOnClickListener { elegirApk() }
-        }
-        layout.addView(botonApk)
+        })
 
         if (dentroDelEspacio) {
+            prepararEspacio(this)
             layout.addView(TextView(this).apply {
-                text = "Estás dentro del espacio de clones"
+                text = "Espacio de clones listo.\n\nAbre la Clonadora normal (la de fuera del maletín) para elegir qué apps clonar."
                 textSize = 18f
                 setTextColor(Color.BLACK)
-                setPadding(0, 24, 0, 0)
+                setPadding(0, 32, 0, 0)
             })
-        } else {
+            setContentView(layout)
+            return
+        }
+
+        if (!hayEspacio) {
             layout.addView(Button(this).apply {
                 text = "Crear espacio de clones"
                 setOnClickListener { crearEspacio() }
             })
         }
 
-        val titulo = TextView(this).apply {
-            text = "Apps instaladas (${apps.size})"
-            textSize = 22f
+        val pm = packageManager
+        val enEspacio = paquetesEnOtrosPerfiles()
+        val items = pm.getInstalledApplications(0)
+            .filter { it.packageName != packageName && pm.getLaunchIntentForPackage(it.packageName) != null }
+            .map {
+                AppItem(
+                    pm.getApplicationLabel(it).toString(),
+                    it.packageName,
+                    pm.getApplicationIcon(it),
+                    enEspacio.contains(it.packageName)
+                )
+            }
+            .sortedBy { it.nombre.lowercase() }
+
+        layout.addView(TextView(this).apply {
+            text = "Toca una app para clonarla"
+            textSize = 20f
             setTextColor(Color.BLACK)
-            setPadding(0, 24, 0, 24)
-        }
+            setPadding(0, 24, 0, 16)
+        })
 
         val lista = ListView(this)
-        lista.adapter = object : ArrayAdapter<String>(
-            this, android.R.layout.simple_list_item_1, nombres
-        ) {
+        lista.adapter = object : BaseAdapter() {
+            override fun getCount() = items.size
+            override fun getItem(position: Int) = items[position]
+            override fun getItemId(position: Int) = position.toLong()
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val v = super.getView(position, convertView, parent) as TextView
-                v.setTextColor(Color.BLACK)
-                return v
+                val item = items[position]
+                val fila = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(8), dp(10), dp(8), dp(10))
+                }
+                val img = ImageView(this@MainActivity).apply {
+                    setImageDrawable(item.icono)
+                    layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+                }
+                val txt = TextView(this@MainActivity).apply {
+                    text = item.nombre + if (item.enEspacio) "   (ya en el espacio)" else ""
+                    textSize = 17f
+                    setTextColor(Color.BLACK)
+                    setPadding(dp(16), 0, 0, 0)
+                }
+                fila.addView(img)
+                fila.addView(txt)
+                return fila
             }
         }
-        lista.setOnItemClickListener { _, _, pos, _ ->
-            Toast.makeText(this, apps[pos].packageName, Toast.LENGTH_LONG).show()
-        }
+        lista.setOnItemClickListener { _, _, pos, _ -> preguntarClon(items[pos]) }
 
-        layout.addView(titulo)
         layout.addView(
             lista,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
         setContentView(layout)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val filtro = IntentFilter(accion)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(receptor, filtro, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(receptor, filtro)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        construirPantalla()
     }
 
     override fun onDestroy() {
