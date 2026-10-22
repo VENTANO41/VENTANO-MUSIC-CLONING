@@ -2,11 +2,14 @@ package com.rabit.clonadora
 
 import android.app.Activity
 import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -57,10 +60,42 @@ class MainActivity : Activity() {
         startActivityForResult(i, 1)
     }
 
+    private fun crearEspacio() {
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_MANAGED_USERS)) {
+            Toast.makeText(this, "Este teléfono no soporta perfiles de trabajo", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!dpm.isProvisioningAllowed(DevicePolicyManager.ACTION_PROVISION_MANAGED_PROFILE)) {
+            Toast.makeText(
+                this,
+                "Android no permite crear el espacio ahora (quizá ya existe uno)",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val admin = ComponentName(this, AdminReceiver::class.java)
+        val i = Intent(DevicePolicyManager.ACTION_PROVISION_MANAGED_PROFILE)
+            .putExtra(DevicePolicyManager.EXTRA_PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME, admin)
+        try {
+            startActivityForResult(i, 2)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 1 && resultCode == RESULT_OK) {
             data?.data?.let { instalarApk(it) }
+        }
+        if (requestCode == 2) {
+            val msg = if (resultCode == RESULT_OK) {
+                "Espacio creado. Busca la pestaña Trabajo en tus apps"
+            } else {
+                "Creación cancelada o fallida"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -100,6 +135,9 @@ class MainActivity : Activity() {
             registerReceiver(receptor, filtro)
         }
 
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        val dentroDelEspacio = dpm.isProfileOwnerApp(packageName)
+
         val pm = packageManager
         val apps = pm.getInstalledApplications(0)
             .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
@@ -112,9 +150,24 @@ class MainActivity : Activity() {
             setPadding(32, 160, 32, 32)
         }
 
-        val boton = Button(this).apply {
+        val botonApk = Button(this).apply {
             text = "Instalar un APK"
             setOnClickListener { elegirApk() }
+        }
+        layout.addView(botonApk)
+
+        if (dentroDelEspacio) {
+            layout.addView(TextView(this).apply {
+                text = "Estás dentro del espacio de clones"
+                textSize = 18f
+                setTextColor(Color.BLACK)
+                setPadding(0, 24, 0, 0)
+            })
+        } else {
+            layout.addView(Button(this).apply {
+                text = "Crear espacio de clones"
+                setOnClickListener { crearEspacio() }
+            })
         }
 
         val titulo = TextView(this).apply {
@@ -138,7 +191,6 @@ class MainActivity : Activity() {
             Toast.makeText(this, apps[pos].packageName, Toast.LENGTH_LONG).show()
         }
 
-        layout.addView(boton)
         layout.addView(titulo)
         layout.addView(
             lista,
