@@ -15,6 +15,22 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("clonadora") {
+            storeFile = rootProject.file("clonadora.p12")
+            storePassword = "clonadora123"
+            keyAlias = "clonadora"
+            keyPassword = "clonadora123"
+            storeType = "pkcs12"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("clonadora")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
